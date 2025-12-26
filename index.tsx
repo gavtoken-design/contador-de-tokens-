@@ -1,6 +1,8 @@
 
-import { GoogleGenAI } from '@google/genai';
-import Chart from 'chart.js';
+import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { Chart, registerables } from 'chart.js';
+
+Chart.register(...registerables);
 
 // --- Types ---
 interface Client {
@@ -36,7 +38,7 @@ function decrypt(encoded: string): string {
       String.fromCharCode(char.charCodeAt(0) ^ SALT.charCodeAt(i % SALT.length))
     ).join('');
   } catch {
-    return 'Erro ao descriptografar';
+    return 'Erro ao decrypt';
   }
 }
 
@@ -48,9 +50,10 @@ let clients: Client[] = [];
 let usageLogs: UsageLog[] = [];
 let filterStartDate: string = '';
 let filterEndDate: string = '';
+let aiResponse: string = '';
 
 // Initial Load
-const rawStorage = localStorage.getItem('api_clients_v3');
+const rawStorage = localStorage.getItem('api_clients_v4');
 if (rawStorage) {
   try {
     const decrypted = JSON.parse(decrypt(rawStorage));
@@ -63,124 +66,91 @@ if (rawStorage) {
 
 let activeView: 'dashboard' | 'simulator' = 'dashboard';
 let isModalOpen = false;
-let debounceTimer: number;
 let visibleKeys: Set<string> = new Set();
 let usageChart: Chart | null = null;
 
-// --- API Logic ---
-async function getCount(text: string, modelName: string = 'gemini-3-flash-preview') {
-  if (!text.trim()) return 0;
-  try {
-    const response = await ai.models.countTokens({
-      model: modelName,
-      contents: [{ parts: [{ text }] }],
-    });
-    return response.totalTokens;
-  } catch (error) {
-    console.error('Error counting tokens:', error);
-    return null;
+// --- Function Declarations ---
+const toolDeclarations: FunctionDeclaration[] = [
+  {
+    name: 'cadastrar_cliente',
+    parameters: {
+      type: Type.OBJECT,
+      description: 'Cadastra um novo cliente no sistema.',
+      properties: {
+        nome: { type: Type.STRING, description: 'Nome do cliente.' },
+        limite: { type: Type.NUMBER, description: 'Limite de tokens.' }
+      },
+      required: ['nome']
+    }
+  },
+  {
+    name: 'remover_cliente',
+    parameters: {
+      type: Type.OBJECT,
+      description: 'Remove um cliente pelo nome.',
+      properties: { nome: { type: Type.STRING } },
+      required: ['nome']
+    }
+  },
+  {
+    name: 'limpar_historico',
+    parameters: { type: Type.OBJECT, properties: {} }
   }
-}
+];
 
-// --- UI Actions ---
+// --- Icons ---
+const Icons = {
+  Dashboard: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`,
+  Simulator: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path><path d="M5 3v4"></path><path d="M19 17v4"></path><path d="M3 5h4"></path><path d="M17 19h4"></path></svg>`,
+  Plus: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
+  Trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>`
+};
+
+// --- Logic ---
 function saveData() {
   const data = { clients, logs: usageLogs };
-  const encryptedData = encrypt(JSON.stringify(data));
-  localStorage.setItem('api_clients_v3', encryptedData);
+  localStorage.setItem('api_clients_v4', encrypt(JSON.stringify(data)));
   render();
 }
 
-function addClient(name: string, apiKey: string, limit: number) {
-  const newClient: Client = {
-    id: crypto.randomUUID(),
-    name,
-    apiKey: encrypt(apiKey),
-    tokensUsed: 0,
-    limit,
-    lastUsed: 'Nunca'
-  };
-  clients.push(newClient);
-  saveData();
-}
+async function runAICommand(prompt: string) {
+  const statusEl = document.getElementById('status-text');
+  if (statusEl) statusEl.textContent = 'Interpretando pedido...';
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: { tools: [{ functionDeclarations: toolDeclarations }] }
+    });
 
-function deleteClient(id: string) {
-  clients = clients.filter(c => c.id !== id);
-  usageLogs = usageLogs.filter(l => l.clientId !== id);
-  saveData();
-}
-
-function simulateUsage(clientId: string, tokens: number) {
-  const client = clients.find(c => c.id === clientId);
-  if (client) {
-    const now = new Date();
-    client.tokensUsed += tokens;
-    client.lastUsed = now.toLocaleString('pt-BR');
-    
-    const newLog: UsageLog = {
-      id: crypto.randomUUID(),
-      clientId,
-      clientName: client.name,
-      tokens,
-      timestamp: now.toLocaleString('pt-BR'),
-      timestampIso: now.toISOString()
-    };
-    usageLogs.unshift(newLog);
-    
-    if (usageLogs.length > 100) usageLogs.pop();
-    saveData();
-    alert(`Sucesso: ${tokens} tokens registrados para ${client.name}`);
-  }
-}
-
-function toggleKeyVisibility(id: string) {
-  if (visibleKeys.has(id)) {
-    visibleKeys.delete(id);
-  } else {
-    visibleKeys.add(id);
-  }
-  render();
-}
-
-// --- Visualization ---
-function initUsageChart() {
-  const ctx = document.getElementById('usage-chart-canvas') as HTMLCanvasElement;
-  if (!ctx) return;
-  if (usageChart) usageChart.destroy();
-
-  usageChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: clients.map(c => c.name),
-      datasets: [
-        {
-          label: 'Tokens Usados',
-          data: clients.map(c => c.tokensUsed),
-          backgroundColor: '#4285f4',
-          borderRadius: 4,
-        },
-        {
-          label: 'Limite',
-          data: clients.map(c => c.limit),
-          backgroundColor: 'rgba(0, 0, 0, 0.08)',
-          borderRadius: 4,
+    const calls = response.functionCalls;
+    if (calls?.length) {
+      for (const call of calls) {
+        if (call.name === 'cadastrar_cliente') {
+          const { nome, limite } = call.args as any;
+          clients.push({ id: crypto.randomUUID(), name: nome, apiKey: encrypt('IA_KEY'), tokensUsed: 0, limit: limite || 100000, lastUsed: 'IA' });
+          aiResponse = `✨ Cliente **${nome}** pronto para uso!`;
+        } else if (call.name === 'remover_cliente') {
+          const { nome } = call.args as any;
+          clients = clients.filter(c => c.name.toLowerCase() !== nome.toLowerCase());
+          aiResponse = `🗑️ Cliente **${nome}** foi arquivado.`;
+        } else if (call.name === 'limpar_historico') {
+          usageLogs = [];
+          aiResponse = `🧹 Histórico limpo como um espelho.`;
         }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { beginAtZero: true },
-        x: { grid: { display: false } }
-      },
-      plugins: {
-        legend: { display: true, position: 'bottom' }
       }
+    } else {
+      aiResponse = response.text || "Comando processado.";
     }
-  });
+    saveData();
+  } catch (e) {
+    aiResponse = "❌ Algo deu errado no processamento.";
+    render();
+  }
 }
 
-// --- Rendering Engine ---
+// --- Render ---
 function render() {
   const app = document.getElementById('app');
   if (!app) return;
@@ -188,15 +158,16 @@ function render() {
   app.innerHTML = `
     <div class="dashboard-layout">
       <aside class="sidebar">
-        <div class="logo">Manager <span>API</span></div>
-        <nav>
+        <div class="logo">
+          <div class="logo-icon">✨</div>
+          Nova<span>API</span>
+        </div>
+        <nav class="nav-group">
           <button class="nav-item ${activeView === 'dashboard' ? 'active' : ''}" id="nav-dashboard">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-            <span>Dashboard</span>
+            ${Icons.Dashboard} Dashboard
           </button>
           <button class="nav-item ${activeView === 'simulator' ? 'active' : ''}" id="nav-simulator">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h7"></path><line x1="16" y1="19" x2="22" y2="19"></line><line x1="19" y1="16" x2="19" y2="22"></line></svg>
-            <span>Simulador</span>
+            ${Icons.Simulator} Simulador IA
           </button>
         </nav>
       </aside>
@@ -205,133 +176,123 @@ function render() {
         ${activeView === 'dashboard' ? renderDashboard() : renderSimulator()}
       </main>
     </div>
-
     ${isModalOpen ? renderModal() : ''}
   `;
 
-  setupEventListeners();
-  if (activeView === 'dashboard' && clients.length > 0) initUsageChart();
+  setupEvents();
+  if (activeView === 'dashboard' && clients.length > 0) initChart();
 }
 
 function renderDashboard() {
-  const totalTokens = clients.reduce((sum, c) => sum + c.tokensUsed, 0);
-  
-  const filteredLogs = usageLogs.filter(log => {
-    if (!log.timestampIso) return true;
-    const logDate = new Date(log.timestampIso);
-    logDate.setHours(0, 0, 0, 0);
-    
-    if (filterStartDate) {
-      const start = new Date(filterStartDate);
-      start.setHours(0, 0, 0, 0);
-      if (logDate < start) return false;
-    }
-    
-    if (filterEndDate) {
-      const end = new Date(filterEndDate);
-      end.setHours(0, 0, 0, 0);
-      if (logDate > end) return false;
-    }
-    return true;
+  const totalTokens = clients.reduce((s, c) => s + c.tokensUsed, 0);
+  const filteredLogs = usageLogs.filter(l => {
+    if (!filterStartDate) return true;
+    return new Date(l.timestampIso) >= new Date(filterStartDate);
   });
 
   return `
     <header class="content-header">
       <div>
-        <h2>Dashboard</h2>
-        <p class="subtitle">Visão geral do consumo de tokens</p>
+        <p class="stat-label">Painel Administrativo</p>
+        <h2>Visão Geral</h2>
       </div>
-      <button class="btn-primary" id="btn-open-modal">Novo Cliente</button>
+      <button class="btn-primary" id="btn-open-modal">${Icons.Plus} Novo Cliente</button>
     </header>
 
     <div class="stats-row">
       <div class="stat-card">
-        <span class="stat-label">Clientes</span>
+        <span class="stat-label">Clientes Ativos</span>
         <span class="stat-value">${clients.length}</span>
       </div>
       <div class="stat-card">
-        <span class="stat-label">Tokens Totais</span>
-        <span class="stat-value">${totalTokens.toLocaleString()}</span>
+        <span class="stat-label">Consumo Total</span>
+        <span class="stat-value">${totalTokens.toLocaleString()} <small style="font-size: 1rem; opacity: 0.5;">tkn</small></span>
       </div>
     </div>
 
     <div class="dashboard-grid">
       <div class="main-column">
-        ${clients.length > 0 ? `
-          <div class="chart-section stat-card">
-            <span class="stat-label">Uso vs Limite</span>
-            <div class="chart-container">
-              <canvas id="usage-chart-canvas"></canvas>
-            </div>
-          </div>
-        ` : ''}
+        <div class="stat-card chart-section">
+          <span class="stat-label">Cota Utilizada</span>
+          <div style="height: 300px;"><canvas id="usage-chart-canvas"></canvas></div>
+        </div>
 
         <div class="table-container">
-          <div class="table-header">Clientes Ativos</div>
+          <div class="table-header">Gerenciamento de Chaves</div>
           <table>
             <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Chave API</th>
-                <th>Consumo</th>
-                <th>Ações</th>
-              </tr>
+              <tr><th>Cliente</th><th>API Key</th><th>Consumo</th><th style="text-align: right;">Ações</th></tr>
             </thead>
             <tbody>
-              ${clients.map(client => {
-                const percent = Math.min((client.tokensUsed / client.limit) * 100, 100);
-                const isVisible = visibleKeys.has(client.id);
-                return `
-                  <tr>
-                    <td><strong>${client.name}</strong></td>
-                    <td>
-                      <div class="key-wrapper">
-                        <code>${isVisible ? decrypt(client.apiKey) : '••••••••'}</code>
-                        <button class="btn-text toggle-visibility" data-id="${client.id}">${isVisible ? 'Ocultar' : 'Ver'}</button>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="usage-bar-container">
-                        <div class="usage-bar" style="width: ${percent}%; background: ${percent > 90 ? '#ea4335' : '#34a853'}"></div>
-                      </div>
-                      <small>${client.tokensUsed.toLocaleString()} / ${client.limit.toLocaleString()}</small>
-                    </td>
-                    <td>
-                      <button class="btn-icon delete" data-id="${client.id}">Remover</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-              ${clients.length === 0 ? '<tr><td colspan="4" class="empty-state">Sem dados.</td></tr>' : ''}
+              ${clients.map(c => `
+                <tr>
+                  <td><strong>${c.name}</strong></td>
+                  <td><code>${visibleKeys.has(c.id) ? decrypt(c.apiKey) : '••••••••'}</code></td>
+                  <td>
+                    <div style="width: 100px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 4px;">
+                      <div style="width: ${Math.min((c.tokensUsed/c.limit)*100, 100)}%; height: 100%; background: var(--primary);"></div>
+                    </div>
+                    <small>${c.tokensUsed.toLocaleString()} / ${c.limit.toLocaleString()}</small>
+                  </td>
+                  <td style="text-align: right;">
+                    <button class="btn-icon delete" data-id="${c.id}">${Icons.Trash}</button>
+                  </td>
+                </tr>
+              `).join('')}
             </tbody>
           </table>
         </div>
       </div>
 
       <div class="side-column">
-        <div class="history-card stat-card">
-          <span class="stat-label">Histórico</span>
-          <div class="filter-controls">
-            <div class="filter-group">
-              <label>De:</label>
-              <input type="date" id="filter-start" value="${filterStartDate}">
-            </div>
-            <div class="filter-group">
-              <label>Até:</label>
-              <input type="date" id="filter-end" value="${filterEndDate}">
-            </div>
-            ${(filterStartDate || filterEndDate) ? `<button class="btn-clear-filters" id="btn-clear-filters">Resetar</button>` : ''}
+        <div class="stat-card history-card">
+          <span class="stat-label">Histórico Recente</span>
+          <div style="margin: 1rem 0;">
+            <input type="date" id="filter-start" value="${filterStartDate}" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border);">
           </div>
           <div class="logs-list">
-            ${filteredLogs.length > 0 ? filteredLogs.slice(0, 15).map(log => `
+            ${filteredLogs.slice(0, 10).map(l => `
               <div class="log-item">
-                <div class="log-info">
-                  <span class="log-client">${log.clientName}</span>
-                  <span class="log-time">${log.timestamp}</span>
+                <div style="font-weight: 700; font-size: 0.85rem;">${l.clientName}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                  <span style="font-size: 0.75rem; color: var(--text-secondary);">${l.timestamp}</span>
+                  <span style="color: #10b981; font-weight: 800;">+${l.tokens}</span>
                 </div>
-                <div class="log-amount">+${log.tokens.toLocaleString()}</div>
               </div>
-            `).join('') : '<p class="empty-logs">Nenhum registro.</p>'}
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderSimulator() {
+  return `
+    <header class="content-header">
+      <div>
+        <p class="stat-label">Inteligência Artificial</p>
+        <h2>Assistente de Fluxo</h2>
+      </div>
+    </header>
+    <div class="simulator-grid" style="display: grid; grid-template-columns: 1fr 300px; gap: 2rem;">
+      <div>
+        <div style="margin-bottom: 1.5rem;">
+          <label class="stat-label">Comando ou Texto de Teste</label>
+          <textarea id="input-text" placeholder="Ex: 'Cadastre a Apple com limite 1 milhão' ou cole um texto para contar tokens..."></textarea>
+        </div>
+        ${aiResponse ? `<div class="ai-bubble">${aiResponse}</div>` : ''}
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <button class="btn-ai" id="btn-ai-process">Processar com IA ✨</button>
+          <span id="status-text" style="font-size: 0.85rem; color: var(--text-secondary);">Pronto</span>
+        </div>
+      </div>
+      <div>
+        <div class="stat-card">
+          <span class="stat-label">Resultado da Análise</span>
+          <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+            <div><small class="stat-label">Tokens Est.</small><div style="font-size: 2rem; font-weight: 800;" id="token-count">0</div></div>
+            <div><small class="stat-label">Caracteres</small><div style="font-size: 1.25rem; font-weight: 700;" id="char-count">0</div></div>
           </div>
         </div>
       </div>
@@ -344,115 +305,71 @@ function renderModal() {
     <div class="modal-overlay">
       <div class="modal-content">
         <h3>Novo Cliente</h3>
-        <form id="add-client-form">
-          <div class="field-group">
-            <label>Nome</label>
-            <input type="text" id="modal-name" required>
-          </div>
-          <div class="field-group">
-            <label>API Key</label>
-            <input type="password" id="modal-key" required>
-          </div>
-          <div class="field-group">
-            <label>Limite Mensal</label>
-            <input type="number" id="modal-limit" required value="100000">
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="btn-secondary" id="btn-close-modal">Fechar</button>
-            <button type="submit" class="btn-primary">Criar</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  `;
-}
-
-function renderSimulator() {
-  return `
-    <header class="content-header">
-      <div>
-        <h2>Simulador</h2>
-        <p class="subtitle">Teste o peso das suas requisições</p>
-      </div>
-    </header>
-    <div class="simulator-grid">
-      <div class="editor-pane">
-        <div class="field-group">
-          <label>Vincular ao cliente:</label>
-          <select id="client-selector" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
-            <option value="">Nenhum (Apenas contagem)</option>
-            ${clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
-          </select>
-        </div>
-        <textarea id="input-text" placeholder="Cole seu texto aqui..."></textarea>
-        <div class="editor-footer">
-          <button class="btn-primary" id="btn-debit" disabled>Debitar Tokens</button>
-          <span id="status-text">Pronto</span>
-        </div>
-      </div>
-      <div class="results-pane">
-        <div class="result-card primary">
-          <span class="label">Tokens</span>
-          <span id="token-count" class="value">0</span>
-        </div>
-        <div class="result-card">
-          <span class="label">Chars</span>
-          <span id="char-count" class="value">0</span>
-        </div>
-        <div class="result-card">
-          <span class="label">Palavras</span>
-          <span id="word-count" class="value">0</span>
+        <input type="text" id="modal-name" placeholder="Nome do Cliente" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
+        <input type="number" id="modal-limit" value="100000" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+          <button class="btn-secondary" onclick="isModalOpen=false; render();" style="border: none; background: none; cursor: pointer; font-weight: 600;">Cancelar</button>
+          <button class="btn-primary" id="btn-save-client">Criar Cliente</button>
         </div>
       </div>
     </div>
   `;
 }
 
-function setupEventListeners() {
+function initChart() {
+  const ctx = document.getElementById('usage-chart-canvas') as HTMLCanvasElement;
+  if (!ctx) return;
+  if (usageChart) usageChart.destroy();
+  usageChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: clients.map(c => c.name),
+      datasets: [{
+        label: 'Consumo Atual',
+        data: clients.map(c => c.tokensUsed),
+        backgroundColor: '#6366f1',
+        borderRadius: 6
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }, x: { grid: { display: false } } }
+    }
+  });
+}
+
+function setupEvents() {
   document.getElementById('nav-dashboard')?.addEventListener('click', () => { activeView = 'dashboard'; render(); });
   document.getElementById('nav-simulator')?.addEventListener('click', () => { activeView = 'simulator'; render(); });
+  document.getElementById('btn-open-modal')?.addEventListener('click', () => { isModalOpen = true; render(); });
+  document.getElementById('btn-ai-process')?.addEventListener('click', () => {
+    const txt = (document.getElementById('input-text') as HTMLTextAreaElement).value;
+    if (txt) runAICommand(txt);
+  });
+  
+  const textEl = document.getElementById('input-text') as HTMLTextAreaElement;
+  textEl?.addEventListener('input', () => {
+    const val = textEl.value;
+    document.getElementById('char-count')!.textContent = val.length.toLocaleString();
+    document.getElementById('token-count')!.textContent = Math.ceil(val.length / 4).toLocaleString();
+  });
 
-  if (activeView === 'dashboard') {
-    document.getElementById('btn-open-modal')?.addEventListener('click', () => { isModalOpen = true; render(); });
-    document.getElementById('filter-start')?.addEventListener('change', (e) => { filterStartDate = (e.target as HTMLInputElement).value; render(); });
-    document.getElementById('filter-end')?.addEventListener('change', (e) => { filterEndDate = (e.target as HTMLInputElement).value; render(); });
-    document.getElementById('btn-clear-filters')?.addEventListener('click', () => { filterStartDate = ''; filterEndDate = ''; render(); });
-    document.querySelectorAll('.toggle-visibility').forEach(btn => btn.addEventListener('click', (e) => toggleKeyVisibility((e.target as HTMLElement).dataset.id!)));
-    document.querySelectorAll('.btn-icon.delete').forEach(btn => btn.addEventListener('click', (e) => confirm('Remover?') && deleteClient((e.target as HTMLElement).dataset.id!)));
-  }
+  document.querySelectorAll('.delete').forEach(b => b.addEventListener('click', (e) => {
+    const id = (e.currentTarget as HTMLElement).dataset.id;
+    clients = clients.filter(c => c.id !== id);
+    saveData();
+  }));
 
-  if (isModalOpen) {
-    document.getElementById('btn-close-modal')?.addEventListener('click', () => { isModalOpen = false; render(); });
-    document.getElementById('add-client-form')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      addClient((document.getElementById('modal-name') as HTMLInputElement).value, 
-                (document.getElementById('modal-key') as HTMLInputElement).value, 
-                parseInt((document.getElementById('modal-limit') as HTMLInputElement).value));
-      isModalOpen = false; render();
-    });
-  }
-
-  if (activeView === 'simulator') {
-    const textEl = document.getElementById('input-text') as HTMLTextAreaElement;
-    textEl?.addEventListener('input', () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout(async () => {
-        const text = textEl.value;
-        document.getElementById('char-count')!.textContent = text.length.toLocaleString();
-        document.getElementById('word-count')!.textContent = text.trim() ? text.trim().split(/\s+/).length.toLocaleString() : '0';
-        const tokens = await getCount(text);
-        if (tokens !== null) {
-          document.getElementById('token-count')!.textContent = tokens.toLocaleString();
-          (document.getElementById('btn-debit') as HTMLButtonElement).disabled = tokens === 0 || !(document.getElementById('client-selector') as HTMLSelectElement).value;
-        }
-      }, 500);
-    });
-    document.getElementById('btn-debit')?.addEventListener('click', () => {
-      const tokens = parseInt(document.getElementById('token-count')!.textContent?.replace(/,/g, '') || '0');
-      simulateUsage((document.getElementById('client-selector') as HTMLSelectElement).value, tokens);
-      textEl.value = ''; render();
-    });
-  }
+  document.getElementById('btn-save-client')?.addEventListener('click', () => {
+    const name = (document.getElementById('modal-name') as HTMLInputElement).value;
+    const limit = (document.getElementById('modal-limit') as HTMLInputElement).value;
+    if (name) {
+      clients.push({ id: crypto.randomUUID(), name, apiKey: encrypt('KEY_'+Math.random()), tokensUsed: 0, limit: parseInt(limit), lastUsed: 'Manual' });
+      isModalOpen = false;
+      saveData();
+    }
+  });
 }
 
 render();
