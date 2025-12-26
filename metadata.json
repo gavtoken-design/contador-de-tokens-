@@ -1,0 +1,5 @@
+{
+  "name": "contador de tokens ",
+  "description": "Uma ferramenta profissional para contar tokens, caracteres e palavras usando a API do Gemini em tempo real.",
+  "requestFramePermissions": []
+}
