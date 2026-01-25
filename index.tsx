@@ -38,7 +38,7 @@ function decrypt(encoded: string): string {
       String.fromCharCode(char.charCodeAt(0) ^ SALT.charCodeAt(i % SALT.length))
     ).join('');
   } catch {
-    return 'Erro ao decrypt';
+    return 'Erro ao descriptografar';
   }
 }
 
@@ -60,7 +60,7 @@ if (rawStorage) {
     clients = decrypted.clients || [];
     usageLogs = decrypted.logs || [];
   } catch (e) {
-    console.error("Failed to load data:", e);
+    console.error("Falha ao carregar dados:", e);
   }
 }
 
@@ -75,10 +75,10 @@ const toolDeclarations: FunctionDeclaration[] = [
     name: 'cadastrar_cliente',
     parameters: {
       type: Type.OBJECT,
-      description: 'Cadastra um novo cliente no sistema.',
+      description: 'Cadastra um novo cliente no sistema de API.',
       properties: {
-        nome: { type: Type.STRING, description: 'Nome do cliente.' },
-        limite: { type: Type.NUMBER, description: 'Limite de tokens.' }
+        nome: { type: Type.STRING, description: 'Nome da empresa ou cliente.' },
+        limite: { type: Type.NUMBER, description: 'Limite mensal de tokens.' }
       },
       required: ['nome']
     }
@@ -87,7 +87,7 @@ const toolDeclarations: FunctionDeclaration[] = [
     name: 'remover_cliente',
     parameters: {
       type: Type.OBJECT,
-      description: 'Remove um cliente pelo nome.',
+      description: 'Remove um cliente existente buscando pelo nome.',
       properties: { nome: { type: Type.STRING } },
       required: ['nome']
     }
@@ -115,7 +115,7 @@ function saveData() {
 
 async function runAICommand(prompt: string) {
   const statusEl = document.getElementById('status-text');
-  if (statusEl) statusEl.textContent = 'Interpretando pedido...';
+  if (statusEl) statusEl.textContent = 'Processando solicitação...';
   
   try {
     const response = await ai.models.generateContent({
@@ -130,22 +130,27 @@ async function runAICommand(prompt: string) {
         if (call.name === 'cadastrar_cliente') {
           const { nome, limite } = call.args as any;
           clients.push({ id: crypto.randomUUID(), name: nome, apiKey: encrypt('IA_KEY'), tokensUsed: 0, limit: limite || 100000, lastUsed: 'IA' });
-          aiResponse = `✨ Cliente **${nome}** pronto para uso!`;
+          aiResponse = `✨ Cliente **${nome}** foi cadastrado com sucesso!`;
         } else if (call.name === 'remover_cliente') {
           const { nome } = call.args as any;
+          const initialLength = clients.length;
           clients = clients.filter(c => c.name.toLowerCase() !== nome.toLowerCase());
-          aiResponse = `🗑️ Cliente **${nome}** foi arquivado.`;
+          if (clients.length < initialLength) {
+             aiResponse = `🗑️ Cliente **${nome}** removido do sistema.`;
+          } else {
+             aiResponse = `⚠️ Não encontrei o cliente **${nome}**.`;
+          }
         } else if (call.name === 'limpar_historico') {
           usageLogs = [];
-          aiResponse = `🧹 Histórico limpo como um espelho.`;
+          aiResponse = `🧹 Todo o histórico de logs foi apagado.`;
         }
       }
     } else {
-      aiResponse = response.text || "Comando processado.";
+      aiResponse = response.text || "Comando processado com sucesso.";
     }
     saveData();
   } catch (e) {
-    aiResponse = "❌ Algo deu errado no processamento.";
+    aiResponse = "❌ Ocorreu um erro ao processar seu pedido.";
     render();
   }
 }
@@ -164,7 +169,7 @@ function render() {
         </div>
         <nav class="nav-group">
           <button class="nav-item ${activeView === 'dashboard' ? 'active' : ''}" id="nav-dashboard">
-            ${Icons.Dashboard} Dashboard
+            ${Icons.Dashboard} Painel Geral
           </button>
           <button class="nav-item ${activeView === 'simulator' ? 'active' : ''}" id="nav-simulator">
             ${Icons.Simulator} Simulador IA
@@ -221,7 +226,7 @@ function renderDashboard() {
           <div class="table-header">Gerenciamento de Chaves</div>
           <table>
             <thead>
-              <tr><th>Cliente</th><th>API Key</th><th>Consumo</th><th style="text-align: right;">Ações</th></tr>
+              <tr><th>Cliente</th><th>Chave API</th><th>Consumo</th><th style="text-align: right;">Ações</th></tr>
             </thead>
             <tbody>
               ${clients.map(c => `
@@ -235,10 +240,11 @@ function renderDashboard() {
                     <small>${c.tokensUsed.toLocaleString()} / ${c.limit.toLocaleString()}</small>
                   </td>
                   <td style="text-align: right;">
-                    <button class="btn-icon delete" data-id="${c.id}">${Icons.Trash}</button>
+                    <button class="btn-icon delete" data-id="${c.id}" title="Excluir">${Icons.Trash}</button>
                   </td>
                 </tr>
               `).join('')}
+              ${clients.length === 0 ? '<tr><td colspan="4" style="text-align:center; color: var(--text-secondary); padding: 2rem;">Nenhum cliente cadastrado.</td></tr>' : ''}
             </tbody>
           </table>
         </div>
@@ -260,6 +266,7 @@ function renderDashboard() {
                 </div>
               </div>
             `).join('')}
+            ${filteredLogs.length === 0 ? '<div style="text-align:center; padding: 1rem; color: var(--text-secondary); font-size: 0.9rem;">Sem registros recentes.</div>' : ''}
           </div>
         </div>
       </div>
@@ -278,11 +285,22 @@ function renderSimulator() {
     <div class="simulator-grid" style="display: grid; grid-template-columns: 1fr 300px; gap: 2rem;">
       <div>
         <div style="margin-bottom: 1.5rem;">
-          <label class="stat-label">Comando ou Texto de Teste</label>
-          <textarea id="input-text" placeholder="Ex: 'Cadastre a Apple com limite 1 milhão' ou cole um texto para contar tokens..."></textarea>
+          <label class="stat-label">Comando ou Texto para Análise</label>
+          <textarea id="input-text" placeholder="Digite um comando para a IA ou cole um texto para contar tokens..."></textarea>
+          
+          <div class="suggestions-box" style="margin-top: 1rem;">
+            <small class="stat-label" style="display:block; margin-bottom:0.5rem; color: var(--primary);">Sugestões Rápidas</small>
+            <div class="chips-container">
+              <button class="suggestion-chip" data-text="Cadastre a empresa TechSolar com limite de 500.000 tokens">Cadastrar Cliente</button>
+              <button class="suggestion-chip" data-text="Remova o cliente TechSolar">Remover Cliente</button>
+              <button class="suggestion-chip" data-text="Limpar todo o histórico de logs">Limpar Histórico</button>
+              <button class="suggestion-chip" data-text="Quantos tokens tem neste texto?">Contar Tokens</button>
+            </div>
+          </div>
+
         </div>
         ${aiResponse ? `<div class="ai-bubble">${aiResponse}</div>` : ''}
-        <div style="display: flex; gap: 12px; align-items: center;">
+        <div style="display: flex; gap: 12px; align-items: center; margin-top: 1.5rem;">
           <button class="btn-ai" id="btn-ai-process">Processar com IA ✨</button>
           <span id="status-text" style="font-size: 0.85rem; color: var(--text-secondary);">Pronto</span>
         </div>
@@ -291,7 +309,7 @@ function renderSimulator() {
         <div class="stat-card">
           <span class="stat-label">Resultado da Análise</span>
           <div style="margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
-            <div><small class="stat-label">Tokens Est.</small><div style="font-size: 2rem; font-weight: 800;" id="token-count">0</div></div>
+            <div><small class="stat-label">Tokens Estimados</small><div style="font-size: 2rem; font-weight: 800;" id="token-count">0</div></div>
             <div><small class="stat-label">Caracteres</small><div style="font-size: 1.25rem; font-weight: 700;" id="char-count">0</div></div>
           </div>
         </div>
@@ -304,11 +322,11 @@ function renderModal() {
   return `
     <div class="modal-overlay">
       <div class="modal-content">
-        <h3>Novo Cliente</h3>
-        <input type="text" id="modal-name" placeholder="Nome do Cliente" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
-        <input type="number" id="modal-limit" value="100000" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
+        <h3 style="margin-top:0;">Novo Cliente</h3>
+        <input type="text" id="modal-name" placeholder="Nome da Empresa/Cliente" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
+        <input type="number" id="modal-limit" value="100000" placeholder="Limite de Tokens" style="width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--border);">
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
-          <button class="btn-secondary" onclick="isModalOpen=false; render();" style="border: none; background: none; cursor: pointer; font-weight: 600;">Cancelar</button>
+          <button class="btn-secondary" onclick="isModalOpen=false; render();" style="border: none; background: none; cursor: pointer; font-weight: 600; color: var(--text-secondary);">Cancelar</button>
           <button class="btn-primary" id="btn-save-client">Criar Cliente</button>
         </div>
       </div>
@@ -355,10 +373,23 @@ function setupEvents() {
     document.getElementById('token-count')!.textContent = Math.ceil(val.length / 4).toLocaleString();
   });
 
+  // Interação com Chips de Sugestão
+  document.querySelectorAll('.suggestion-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      const text = (e.currentTarget as HTMLElement).dataset.text;
+      if (text && textEl) {
+        textEl.value = text;
+        textEl.dispatchEvent(new Event('input')); // Dispara contagem
+      }
+    });
+  });
+
   document.querySelectorAll('.delete').forEach(b => b.addEventListener('click', (e) => {
-    const id = (e.currentTarget as HTMLElement).dataset.id;
-    clients = clients.filter(c => c.id !== id);
-    saveData();
+    if (confirm('Tem certeza que deseja remover este cliente permanentemente?')) {
+      const id = (e.currentTarget as HTMLElement).dataset.id;
+      clients = clients.filter(c => c.id !== id);
+      saveData();
+    }
   }));
 
   document.getElementById('btn-save-client')?.addEventListener('click', () => {

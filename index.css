@@ -239,6 +239,7 @@ td {
   font-weight: 500;
   box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4);
   margin: 1.5rem 0;
+  animation: fadeIn 0.3s ease-out;
 }
 
 textarea {
@@ -247,12 +248,40 @@ textarea {
   transition: border-color 0.2s;
   padding: 1.5rem;
   font-size: 1.05rem;
+  font-family: inherit;
 }
 
 textarea:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+}
+
+/* Sugestões de IA */
+.chips-container {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.suggestion-chip {
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--primary);
+  border: 1px solid transparent;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.suggestion-chip:hover {
+  background: var(--primary);
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(99, 102, 241, 0.2);
 }
 
 /* Botões */
@@ -262,6 +291,9 @@ textarea:focus {
   font-weight: 700;
   border-radius: 10px;
   box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.2);
+  color: white;
+  border: none;
+  cursor: pointer;
 }
 
 .btn-ai {
@@ -270,6 +302,14 @@ textarea:focus {
   font-weight: 700;
   border-radius: 10px;
   box-shadow: 0 4px 15px rgba(168, 85, 247, 0.3);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.btn-ai:hover {
+  transform: translateY(-2px);
 }
 
 /* Gráfico */
@@ -285,4 +325,9 @@ textarea:focus {
 @media (max-width: 768px) {
   .main-content { padding: 1.5rem; }
   .sidebar { padding: 1rem; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
